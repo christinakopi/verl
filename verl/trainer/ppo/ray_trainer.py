@@ -49,6 +49,7 @@ from verl.trainer.ppo.metric_utils import (
     compute_variance_proxy_metrics,
     process_validation_metrics,
 )
+from verl.trainer.ppo.prm_chunk import PRMChunkAdvantageEstimator
 from verl.trainer.ppo.reward import extract_reward
 from verl.trainer.ppo.utils import (
     Role,
@@ -316,6 +317,18 @@ class RayPPOTrainer:
         self.use_prefix_grouper = self.config.actor_rollout_ref.actor.get("use_prefix_grouper", False)
 
         self._create_dataloader(train_dataset, val_dataset, collate_fn, train_sampler)
+
+        self.prm_chunk_adv_estimator = None
+        if self.config.algorithm.adv_estimator == "prm_chunk":
+            prm_chunk_cfg = self.config.algorithm.prm_chunk
+            if not prm_chunk_cfg.enable:
+                raise ValueError("algorithm.adv_estimator=prm_chunk requires algorithm.prm_chunk.enable=True")
+            if not prm_chunk_cfg.prm_model_path:
+                raise ValueError("algorithm.prm_chunk.prm_model_path must be set when adv_estimator=prm_chunk")
+            if self.use_critic:
+                raise ValueError("algorithm.adv_estimator=prm_chunk does not support critic training; set critic.enable=False")
+            self.prm_chunk_adv_estimator = PRMChunkAdvantageEstimator(self.tokenizer, prm_chunk_cfg)
+            print(self.prm_chunk_adv_estimator.last_startup_summary)
 
         self.checkpoint_manager = None
 
@@ -1528,15 +1541,22 @@ class RayPPOTrainer:
                             "norm_adv_by_std_in_grpo", True
                         )  # GRPO adv normalization factor
 
-                        batch = compute_advantage(
-                            batch,
-                            adv_estimator=self.config.algorithm.adv_estimator,
-                            gamma=self.config.algorithm.gamma,
-                            lam=self.config.algorithm.lam,
-                            num_repeat=self.config.actor_rollout_ref.rollout.n,
-                            norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
-                            config=self.config.algorithm,
-                        )
+                        if self.config.algorithm.adv_estimator == "prm_chunk":
+                            assert self.prm_chunk_adv_estimator is not None
+                            advantages, returns, prm_chunk_metrics = self.prm_chunk_adv_estimator.compute(batch)
+                            batch.batch["advantages"] = advantages
+                            batch.batch["returns"] = returns
+                            metrics.update(prm_chunk_metrics)
+                        else:
+                            batch = compute_advantage(
+                                batch,
+                                adv_estimator=self.config.algorithm.adv_estimator,
+                                gamma=self.config.algorithm.gamma,
+                                lam=self.config.algorithm.lam,
+                                num_repeat=self.config.actor_rollout_ref.rollout.n,
+                                norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
+                                config=self.config.algorithm,
+                            )
 
                     # update critic
                     if self.use_critic:
