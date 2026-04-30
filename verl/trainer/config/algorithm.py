@@ -13,11 +13,13 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
+
+from verl.trainer.ppo.prm_chunk import DEFAULT_SCORING_PROMPT_TEMPLATE
 from typing import Any, Optional
 
 from verl.base_config import BaseConfig
 
-__all__ = ["AlgoConfig", "FilterGroupsConfig", "KLControlConfig", "RolloutCorrectionConfig"]
+__all__ = ["AlgoConfig", "FilterGroupsConfig", "KLControlConfig", "PRMChunkConfig", "RolloutCorrectionConfig"]
 
 
 @dataclass
@@ -614,6 +616,27 @@ class RolloutCorrectionConfig(BaseConfig):
 
 
 @dataclass
+class PRMChunkConfig(BaseConfig):
+    """Configuration for frozen PRM chunk-level value advantages."""
+
+    enable: bool = False
+    prm_model_path: Optional[str] = None
+    positive_label: str = "success"
+    negative_label: str = "fail"
+    scoring_prompt_template: str = DEFAULT_SCORING_PROMPT_TEMPLATE
+    batch_size: int = 8
+    chunking: str = "step_based"
+    chunk_size_tokens: int = 128
+    chunk_advantage_assignment: str = "broadcast"
+    advantage_mode: str = "delta_value"
+    use_final_reward_bootstrap: bool = False
+    log_chunk_length_bias: bool = True
+    device: Optional[str] = None
+
+
+
+
+@dataclass
 class AlgoConfig(BaseConfig):
     """Configuration for the algorithm.
 
@@ -661,6 +684,7 @@ class AlgoConfig(BaseConfig):
     # Rollout Correction: corrects off-policy issues (policy mismatch, model staleness, distribution shifts)
     # Set to None to disable, use RolloutCorrectionConfig presets (e.g., .tis(), .mis()), or pass dict
     rollout_correction: Optional[RolloutCorrectionConfig] = None
+    prm_chunk: PRMChunkConfig = field(default_factory=PRMChunkConfig)
     # GDPO (Group reward-Decoupled Normalization Policy Optimization) settings.
     # gdpo_reward_keys: keys in non_tensor_batch (from compute_score's return dict) that
     #   correspond to individual reward dimensions, e.g. ["format_reward", "accuracy_reward"].
