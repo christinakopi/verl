@@ -104,40 +104,19 @@ algorithm:
 
     enable: False
     prm_model_path: null
-    positive_label: success
-    negative_label: fail
-    scoring_prompt_template: |
-      You are given a math problem and a proposed multiple-step solution, with one step on each line.
 
-      [Math Problem]
-      {problem}
+    # Single switch for the verifier style:
+    # - thinkprm: uses correct/incorrect
+    # - success_prm: uses success/fail
+    # - custom: use the explicit labels/template below
+    prm_variant: thinkprm
 
-      [Solution]
-      {solution}
+    # Leave these null for built-in variants above.
+    positive_label: null
+    negative_label: null
+    scoring_prompt_template: null
+    decision_prefix: null
 
-      Review and critique the proposed solution steps and determine whether each step should be labeled success or fail.
-
-      A success step is one that is logically correct and brings the solution closer to solving the problem or reaching the correct final answer.
-
-      A fail step is one that is logically incorrect, irrelevant, misleading, or does not bring the solution closer to the correct final answer.
-
-      Also rate each step for its likelihood of success on a scale from 1 to 10:
-      10 = this step definitely leads toward success.
-      5 = this step might lead toward success.
-      1 = this step does not lead toward success.
-
-      If the solution is incomplete, only critique the steps that are provided.
-
-      Your output must be in the following format:
-
-      Let's verify step by step:
-
-      Step 1: <critique> This step is \boxed{{{positive_label}}} and scores \boxed{{rating}}
-      Step 2: <critique> This step is \boxed{{{negative_label}}} and scores \boxed{{rating}}
-      ...
-      Step n: <critique> This step is \boxed{{{positive_label}/{negative_label}}} and scores \boxed{{rating}}
-
-      If you find a fail step, you should still try to evaluate the next steps for success whenever possible, because later steps may recover or still move closer to the solution. However, if an earlier logical error makes the following steps impossible to evaluate meaningfully, state that clearly.
     batch_size: 8
     chunking: step_based
     chunk_size_tokens: 128

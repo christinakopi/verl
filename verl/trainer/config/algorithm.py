@@ -621,9 +621,11 @@ class PRMChunkConfig(BaseConfig):
 
     enable: bool = False
     prm_model_path: Optional[str] = None
-    positive_label: str = "success"
-    negative_label: str = "fail"
-    scoring_prompt_template: str = DEFAULT_SCORING_PROMPT_TEMPLATE
+    prm_variant: str = "thinkprm"
+    positive_label: Optional[str] = None
+    negative_label: Optional[str] = None
+    scoring_prompt_template: Optional[str] = None
+    decision_prefix: Optional[str] = None
     batch_size: int = 8
     chunking: str = "step_based"
     chunk_size_tokens: int = 128
