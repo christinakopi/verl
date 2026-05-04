@@ -66,7 +66,7 @@ Step n: <critique> This step is \boxed{{success/fail}} and scores \boxed{{rating
 If you find a fail step, you should still try to evaluate the next steps for success whenever possible, because later steps may recover or still move closer to the solution. However, if an earlier logical error makes the following steps impossible to evaluate meaningfully, state that clearly."""
 
 DEFAULT_SCORING_PROMPT_TEMPLATE = THINKPRM_SCORING_PROMPT_TEMPLATE
-DEFAULT_DECISION_PREFIX = "This step is \boxed{" 
+DEFAULT_DECISION_PREFIX = "This step is \\boxed{"
 
 PRM_VARIANT_PRESETS: dict[str, dict[str, str]] = {
     THINKPRM_VARIANT: {
@@ -162,13 +162,15 @@ def build_problem_text(
 
 
 
-def resolve_prm_variant_config(config) -> tuple[str, str, str, str, str]:
+def resolve_prm_variant_config(config) -> tuple[str, str, str, str, str, bool]:
     """Resolve labels and prompt template for the selected PRM variant."""
     variant = str(config.get("prm_variant", THINKPRM_VARIANT)).strip().lower()
     if variant not in SUPPORTED_PRM_VARIANTS:
         raise ValueError(
             f"Unsupported PRM variant: {variant!r}. Expected one of: {sorted(SUPPORTED_PRM_VARIANTS)}"
         )
+
+    default_use_chat_template = True
 
     if variant == CUSTOM_PRM_VARIANT:
         positive_label = config.get("positive_label")
@@ -181,14 +183,16 @@ def resolve_prm_variant_config(config) -> tuple[str, str, str, str, str]:
         if not prompt_template:
             prompt_template = DEFAULT_SCORING_PROMPT_TEMPLATE
         decision_prefix = str(config.get("decision_prefix") or DEFAULT_DECISION_PREFIX)
-        return variant, str(positive_label), str(negative_label), str(prompt_template), decision_prefix
+        use_chat_template = bool(config.get("use_chat_template_for_generation", default_use_chat_template))
+        return variant, str(positive_label), str(negative_label), str(prompt_template), decision_prefix, use_chat_template
 
     preset = PRM_VARIANT_PRESETS[variant]
     positive_label = str(config.get("positive_label") or preset["positive_label"])
     negative_label = str(config.get("negative_label") or preset["negative_label"])
     prompt_template = config.get("scoring_prompt_template") or preset["scoring_prompt_template"]
     decision_prefix = str(config.get("decision_prefix") or preset["decision_prefix"])
-    return variant, positive_label, negative_label, str(prompt_template), decision_prefix
+    use_chat_template = bool(config.get("use_chat_template_for_generation", default_use_chat_template))
+    return variant, positive_label, negative_label, str(prompt_template), decision_prefix, use_chat_template
 
 
 def inspect_label_strings(tokenizer, labels: list[str]) -> list[LabelTokenCheck]:
@@ -408,7 +412,14 @@ class GenericLabelPRMScorer:
         self.config = config
         self.model_path = config.prm_model_path
         self.batch_size = int(config.get("batch_size", 8))
-        self.prm_variant, self.positive_label, self.negative_label, self.prompt_template, self.decision_prefix = resolve_prm_variant_config(config)
+        (
+            self.prm_variant,
+            self.positive_label,
+            self.negative_label,
+            self.prompt_template,
+            self.decision_prefix,
+            self.use_chat_template_for_generation,
+        ) = resolve_prm_variant_config(config)
         self.device = torch.device(config.get("device", "cuda" if torch.cuda.is_available() else "cpu"))
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_path, trust_remote_code=True)
         if self.tokenizer.pad_token is None:
@@ -417,10 +428,12 @@ class GenericLabelPRMScorer:
         self.model.to(self.device)
         self.model.eval()
 
-        sample_prompt = self.build_prompt(problem="1+1=?", solution="Step 1: We add the numbers.")
+        sample_prompt = self.render_generation_prompt(
+            self.build_prompt(problem="1+1=?", solution="Step 1: We add the numbers.")
+        )
         label_slot_prefix = (
-            f"{sample_prompt}\n\nLet's verify step by step:\n\n"
-            "Step 1: placeholder critique. This step is \\boxed{"
+            f"{sample_prompt}\nLet's verify step by step:\n\n"
+            f"Step 1: placeholder critique. {self.decision_prefix}"
         )
         self.label_context = resolve_label_context(
             tokenizer=self.tokenizer,
@@ -452,6 +465,20 @@ class GenericLabelPRMScorer:
             negative_label=self.negative_label,
         )
 
+    def render_generation_prompt(self, prompt: str) -> str:
+        """Render the verifier prompt through the tokenizer chat template when configured."""
+        if not self.use_chat_template_for_generation:
+            return prompt
+        try:
+            return self.tokenizer.apply_chat_template(
+                [{"role": "user", "content": prompt}],
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+        except Exception as exc:
+            logger.warning("Falling back to raw PRM prompt because chat template rendering failed: %s", exc)
+            return prompt
+
     def startup_summary(self) -> str:
         """Return a compact startup summary for debugging tokenizer behavior."""
         label_parts = [
@@ -461,7 +488,8 @@ class GenericLabelPRMScorer:
         return (
             f"PRM variant={self.prm_variant}; label token check: "
             + ", ".join(label_parts)
-            + f"; context_mode={self.label_context.mode}; "
+            + f"; use_chat_template_for_generation={self.use_chat_template_for_generation}; "
+            + f"context_mode={self.label_context.mode}; "
             + f"single_token_logits={self.label_context.use_single_token_logits}; "
             + f"positive_context_ids={self.label_context.positive_token_ids}; "
             + f"negative_context_ids={self.label_context.negative_token_ids}"
@@ -560,7 +588,8 @@ class GenericLabelPRMScorer:
     def generate_step_critique(self, problem: str, solution: str) -> tuple[str, list[float]]:
         """Generate a critique and convert its boxed decisions into step scores."""
         prompt = self.build_prompt(problem=problem, solution=solution)
-        inputs = self._prepare_inputs([prompt])
+        rendered_prompt = self.render_generation_prompt(prompt)
+        inputs = self._prepare_inputs([rendered_prompt])
         max_new_tokens = int(self.config.get("max_new_tokens", 512))
         generation = self.model.generate(
             **inputs,
